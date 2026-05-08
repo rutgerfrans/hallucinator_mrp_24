@@ -316,14 +316,27 @@ fn first_token_lower(name: &str) -> Option<String> {
     }
 }
 
+/// Drop a trailing DBLP-style 4-digit disambiguation suffix
+/// (`"Wenbo Guo 0001"` → `["Wenbo", "Guo"]`). Without this, downstream
+/// surname extraction would treat `0001` as the surname.
+fn strip_dblp_suffix<'a>(parts: &[&'a str]) -> Vec<&'a str> {
+    if parts.len() >= 2 {
+        let last = *parts.last().unwrap();
+        if last.len() == 4 && last.bytes().all(|b| b.is_ascii_digit()) {
+            return parts[..parts.len() - 1].to_vec();
+        }
+    }
+    parts.to_vec()
+}
+
 /// Extract surname from name parts, handling multi-word surnames and suffixes.
 fn get_surname_from_parts(parts: &[&str]) -> String {
     if parts.is_empty() {
         return String::new();
     }
 
-    // Strip name suffixes
-    let mut parts = parts.to_vec();
+    // Strip DBLP disambiguation suffix and name suffixes
+    let mut parts = strip_dblp_suffix(parts);
     while parts.len() >= 2
         && NAME_SUFFIXES.contains(parts.last().unwrap().to_lowercase().trim_end_matches('.'))
     {
@@ -381,7 +394,11 @@ fn normalize_author(name: &str) -> String {
         return format!("{} {}", first_initial, surname.to_lowercase());
     }
 
-    let parts: Vec<&str> = name.split_whitespace().collect();
+    let raw_parts: Vec<&str> = name.split_whitespace().collect();
+    if raw_parts.is_empty() {
+        return String::new();
+    }
+    let parts = strip_dblp_suffix(&raw_parts);
     if parts.is_empty() {
         return String::new();
     }
@@ -544,6 +561,19 @@ mod tests {
     #[test]
     fn test_get_last_name_multi_word() {
         assert_eq!(get_last_name("Jay Van Bavel"), "van bavel");
+    }
+
+    #[test]
+    fn test_dblp_homonym_suffix_stripped() {
+        // DBLP appends 4-digit homonym suffixes ("Wenbo Guo 0001") to
+        // disambiguate same-named authors. The suffix must not leak
+        // into surname extraction or normalization.
+        assert_eq!(get_last_name("Wenbo Guo 0001"), "guo");
+        assert_eq!(normalize_author("Wenbo Guo 0001"), "W guo");
+        assert!(validate_authors(
+            &s(&["Wenbo Guo"]),
+            &s(&["Wenbo Guo 0001", "Alice Jones"]),
+        ));
     }
 
     #[test]

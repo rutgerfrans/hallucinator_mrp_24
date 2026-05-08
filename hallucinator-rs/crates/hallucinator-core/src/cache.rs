@@ -1049,9 +1049,18 @@ pub(crate) fn author_fingerprint(raw: &str) -> Option<String> {
         (first, surname.trim())
     } else {
         // "John Smith" form — last whitespace token is the surname.
-        let parts: Vec<&str> = s.split_whitespace().collect();
+        let mut parts: Vec<&str> = s.split_whitespace().collect();
         if parts.is_empty() {
             return None;
+        }
+        // Drop a trailing DBLP 4-digit disambiguation suffix
+        // ("Wenbo Guo 0001" → "Wenbo Guo") so it doesn't get read
+        // as the surname.
+        if parts.len() >= 2 {
+            let last = *parts.last().unwrap();
+            if last.len() == 4 && last.bytes().all(|b| b.is_ascii_digit()) {
+                parts.pop();
+            }
         }
         if parts.len() == 1 {
             // Single name — treat it as surname; no initial.
@@ -1119,6 +1128,21 @@ impl std::fmt::Debug for QueryCache {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn author_fingerprint_strips_dblp_homonym_suffix() {
+        // DBLP appends 4-digit suffixes ("Wenbo Guo 0001"); the fingerprint
+        // is used in the phantom-author guard, so the surname must come
+        // from "Guo", not "0001".
+        assert_eq!(
+            author_fingerprint("Wenbo Guo 0001"),
+            Some("w:guo".to_string())
+        );
+        assert_eq!(
+            author_fingerprint("Wenbo Guo"),
+            author_fingerprint("Wenbo Guo 0001")
+        );
+    }
 
     #[test]
     fn cache_miss_on_empty() {
