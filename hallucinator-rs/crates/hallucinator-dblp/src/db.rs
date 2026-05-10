@@ -159,6 +159,10 @@ pub fn get_counts(conn: &Connection) -> Result<(i64, i64, i64), DblpError> {
 }
 
 /// Get author names for a publication by its integer ID.
+///
+/// Strips DBLP's trailing 4-digit homonym disambiguation suffix
+/// (`"Wenbo Guo 0001"` → `"Wenbo Guo"`) so callers compare against
+/// citation-style names. See <https://dblp.org/faq/1474704.html>.
 pub fn get_authors_for_publication(
     conn: &Connection,
     pub_id: i64,
@@ -171,8 +175,22 @@ pub fn get_authors_for_publication(
     let authors = stmt
         .query_map(params![pub_id], |row| row.get::<_, String>(0))?
         .filter_map(|r| r.ok())
+        .map(|name| strip_homonym_suffix(&name))
         .collect();
     Ok(authors)
+}
+
+/// Drop a trailing 4-digit DBLP homonym suffix from an author name.
+fn strip_homonym_suffix(name: &str) -> String {
+    let trimmed = name.trim_end();
+    let tokens: Vec<&str> = trimmed.split_whitespace().collect();
+    if tokens.len() >= 2 {
+        let last = *tokens.last().unwrap();
+        if last.len() == 4 && last.bytes().all(|b| b.is_ascii_digit()) {
+            return tokens[..tokens.len() - 1].join(" ");
+        }
+    }
+    trimmed.to_string()
 }
 
 #[cfg(test)]
@@ -258,6 +276,36 @@ mod tests {
         let mut authors = get_authors_for_publication(&conn, pub_id).unwrap();
         authors.sort();
         assert_eq!(authors, vec!["Alice", "Bob"]);
+    }
+
+    #[test]
+    fn test_get_authors_strips_homonym_suffix() {
+        // DBLP appends a 4-digit suffix to disambiguate same-named authors
+        // ("Wenbo Guo 0001"). The suffix is internal bookkeeping and must
+        // not leak into author comparison; strip at the boundary.
+        let conn = setup_db();
+        let a = insert_or_get_author(&conn, "Wenbo Guo 0001").unwrap();
+        let b = insert_or_get_author(&conn, "Alice Smith").unwrap();
+        let pub_id = insert_or_get_publication(&conn, "rec/x", "Paper").unwrap();
+        let mut batch = InsertBatch::new();
+        batch.publication_authors.push((pub_id, a));
+        batch.publication_authors.push((pub_id, b));
+        insert_batch(&conn, &batch).unwrap();
+
+        let mut authors = get_authors_for_publication(&conn, pub_id).unwrap();
+        authors.sort();
+        assert_eq!(authors, vec!["Alice Smith", "Wenbo Guo"]);
+    }
+
+    #[test]
+    fn test_strip_homonym_suffix_unit() {
+        assert_eq!(strip_homonym_suffix("Wenbo Guo 0001"), "Wenbo Guo");
+        assert_eq!(strip_homonym_suffix("Alice Smith"), "Alice Smith");
+        // Don't strip non-4-digit trailing tokens.
+        assert_eq!(strip_homonym_suffix("Smith 12345"), "Smith 12345");
+        assert_eq!(strip_homonym_suffix("Smith 123"), "Smith 123");
+        // Single-token name with a 4-digit string stays put (no surname to keep).
+        assert_eq!(strip_homonym_suffix("0001"), "0001");
     }
 
     #[test]
