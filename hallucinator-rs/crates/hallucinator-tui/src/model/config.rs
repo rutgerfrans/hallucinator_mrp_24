@@ -101,9 +101,12 @@ impl Default for ConfigState {
             ("ACL Anthology".to_string(), true),
             ("Europe PMC".to_string(), true),
             ("PubMed".to_string(), true),
+            ("IACR ePrint".to_string(), true),
             ("OpenAlex".to_string(), true),
             ("DOI".to_string(), true),
             ("GovInfo".to_string(), true),
+            ("Standards".to_string(), true),
+            ("Open Library".to_string(), true),
             // PatentsView disabled - API key grants suspended
         ];
 
