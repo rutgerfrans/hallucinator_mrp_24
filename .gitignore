@@ -219,3 +219,8 @@ test-data/
 
 # Windows artifacts
 nul
+
+# SBE-Thesis-file
+hallucinator-rs/docker/searxng/llm-era-test
+hallucinator-rs/docker/searxng/llm-era-test.zip
+hallucinator-rs/docker/searxng/pre-llm-era-test.zip

@@ -153,14 +153,14 @@ impl RateLimiters {
         limiters.insert("CrossRef", AdaptiveDbLimiter::per_second(crossref_rate));
 
         // arXiv API: 3/s is the actual documented limit
-        limiters.insert("arXiv", AdaptiveDbLimiter::per_second(3));
+        limiters.insert("arXiv", AdaptiveDbLimiter::per_second(10)); // was 3
 
         // DBLP (online): ~1/s guideline
-        limiters.insert("DBLP", AdaptiveDbLimiter::per_second(1));
+        limiters.insert("DBLP", AdaptiveDbLimiter::per_second(3)); // was 1
 
         // Semantic Scholar: keyless ~100 req/5min, keyed 1/s (basic tier)
         if has_s2_api_key {
-            limiters.insert("Semantic Scholar", AdaptiveDbLimiter::per_second(1));
+            limiters.insert("Semantic Scholar", AdaptiveDbLimiter::per_second(10)); // was 1
         } else {
             // ~0.33/s → 1 request per 3 seconds
             limiters.insert(
@@ -180,7 +180,7 @@ impl RateLimiters {
 
         // OpenAlex: 10/s without key, 100/s with key — light governor so adaptive
         // backoff kicks in if we get 429'd
-        limiters.insert("OpenAlex", AdaptiveDbLimiter::per_second(10));
+        limiters.insert("OpenAlex", AdaptiveDbLimiter::per_second(20)); // was 10
         // DOI (doi.org): generous limit, no documented cap but be polite
         limiters.insert("DOI", AdaptiveDbLimiter::per_second(3));
 
