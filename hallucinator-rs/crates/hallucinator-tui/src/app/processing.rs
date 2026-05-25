@@ -315,6 +315,7 @@ impl App {
             // NotFound-with-URL refs surface as "skipped" in the same
             // way as the CLI default.
             url_match: false,
+            openalex_fallback_only: self.config_state.openalex_fallback_only,
         }
     }
 

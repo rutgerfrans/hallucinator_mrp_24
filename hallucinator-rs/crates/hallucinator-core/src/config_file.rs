@@ -31,6 +31,10 @@ pub struct DatabasesConfig {
     pub cache_path: Option<String>,
     pub searxng_url: Option<String>,
     pub disabled: Option<Vec<String>>,
+    /// When true (the default), online OpenAlex runs only as a last-resort
+    /// fallback rather than alongside the other databases. See
+    /// [`crate::Config::openalex_fallback_only`].
+    pub openalex_fallback_only: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -173,6 +177,15 @@ pub fn merge(base: ConfigFile, overlay: ConfigFile) -> ConfigFile {
                 .as_ref()
                 .and_then(|d| d.disabled.clone())
                 .or_else(|| base.databases.as_ref().and_then(|d| d.disabled.clone())),
+            openalex_fallback_only: overlay
+                .databases
+                .as_ref()
+                .and_then(|d| d.openalex_fallback_only)
+                .or_else(|| {
+                    base.databases
+                        .as_ref()
+                        .and_then(|d| d.openalex_fallback_only)
+                }),
         }),
         concurrency: Some(ConcurrencyConfig {
             num_workers: overlay

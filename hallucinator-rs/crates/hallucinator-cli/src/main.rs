@@ -930,6 +930,10 @@ async fn check(
         cache_positive_ttl_secs: positive_ttl,
         cache_negative_ttl_secs: negative_ttl,
         url_match,
+        // OpenAlex runs as a last-resort fallback (not in the concurrent
+        // group) to avoid hitting its rate limit on every reference. The
+        // CLI doesn't expose a flag to change this; the TUI does.
+        openalex_fallback_only: true,
     };
 
     // Handle archives: extract each file and run check on each independently

@@ -530,6 +530,7 @@ async fn apply_fallbacks(
     mut db_results: Vec<DbResult>,
     urls: &[String],
     title: &str,
+    ref_authors: &[String],
     config: &Config,
     client: &reqwest::Client,
     progress: &(dyn Fn(ProgressEvent) + Send + Sync),
@@ -556,6 +557,118 @@ async fn apply_fallbacks(
     } else {
         expand_url_variants(urls)
     };
+
+    // ── OpenAlex last-resort fallback ──────────────────────────────────
+    //
+    // When `openalex_fallback_only` is set (the default), online OpenAlex is
+    // kept out of the concurrent query group (see `build_database_list`) and
+    // consulted only here — for references nothing else verified. This is
+    // also the backfill path when an offline OpenAlex index is active but
+    // missed the reference. Either way it runs at most once per NotFound
+    // ref, which is what keeps OpenAlex's strict rate limit from being hit
+    // on every reference. Routed through the rate limiter + cache (keyed by
+    // the backend's "OpenAlex" name) like any other DB query. Runs before
+    // the URL/Wayback/web-search fallbacks because a metadata hit (with
+    // author verification) is a stronger signal than mere URL liveness.
+    if status == Status::NotFound
+        && let Some(ref api_key) = config.openalex_key
+        && (config.openalex_fallback_only || config.openalex_offline_db.is_some())
+    {
+        let openalex = crate::db::openalex::OpenAlex {
+            api_key: api_key.clone(),
+        };
+        let timeout = Duration::from_secs(config.db_timeout_secs);
+        let rl = rate_limit::query_with_retry_with_authors(
+            &openalex,
+            title,
+            ref_authors,
+            client,
+            timeout,
+            &config.rate_limiters,
+            config.max_rate_limit_retries,
+            config.query_cache.as_deref(),
+        )
+        .await;
+        let elapsed = rl.elapsed;
+
+        if let Ok(ref qr) = rl.result
+            && qr.is_found()
+        {
+            // Honor `check_openalex_authors`: when set, a title hit with
+            // non-matching authors is reported as an author mismatch rather
+            // than a clean verify. When unset (the default), OpenAlex is
+            // treated as a title-only match like the other fallbacks.
+            let authors_ok = ref_authors.is_empty()
+                || !config.check_openalex_authors
+                || validate_authors(ref_authors, &qr.authors);
+
+            if authors_ok {
+                progress(ProgressEvent::DatabaseQueryComplete {
+                    paper_index: 0,
+                    ref_index,
+                    db_name: "OpenAlex API".to_string(),
+                    status: DbStatus::Match,
+                    elapsed,
+                });
+                db_results.push(DbResult {
+                    db_name: "OpenAlex API".into(),
+                    status: DbStatus::Match,
+                    elapsed: Some(elapsed),
+                    found_authors: qr.authors.clone(),
+                    paper_url: qr.paper_url.clone(),
+                    error_message: None,
+                });
+                return (
+                    Status::Verified,
+                    Some("OpenAlex API".into()),
+                    qr.authors.clone(),
+                    qr.paper_url.clone(),
+                    db_results,
+                    false,
+                );
+            }
+
+            progress(ProgressEvent::DatabaseQueryComplete {
+                paper_index: 0,
+                ref_index,
+                db_name: "OpenAlex API".to_string(),
+                status: DbStatus::AuthorMismatch,
+                elapsed,
+            });
+            db_results.push(DbResult {
+                db_name: "OpenAlex API".into(),
+                status: DbStatus::AuthorMismatch,
+                elapsed: Some(elapsed),
+                found_authors: qr.authors.clone(),
+                paper_url: qr.paper_url.clone(),
+                error_message: None,
+            });
+            return (
+                Status::Mismatch(MismatchKind::AUTHOR),
+                Some("OpenAlex API".into()),
+                qr.authors.clone(),
+                qr.paper_url.clone(),
+                db_results,
+                false,
+            );
+        }
+
+        progress(ProgressEvent::DatabaseQueryComplete {
+            paper_index: 0,
+            ref_index,
+            db_name: "OpenAlex API".to_string(),
+            status: DbStatus::NoMatch,
+            elapsed,
+        });
+        db_results.push(DbResult {
+            db_name: "OpenAlex API".into(),
+            status: DbStatus::NoMatch,
+            elapsed: Some(elapsed),
+            found_authors: vec![],
+            paper_url: None,
+            error_message: None,
+        });
+    }
 
     // ── URL liveness check ─────────────────────────────────────────────
     // Gated on `config.url_match`: when off, the ref will finish with
@@ -812,6 +925,7 @@ async fn finalize_collector(collector: &RefCollector) {
             remote_db_results,
             &collector.reference.urls,
             &collector.title,
+            &collector.reference.authors,
             &collector.config,
             &collector.client,
             collector.progress.as_ref(),
@@ -1162,6 +1276,7 @@ async fn coordinator_loop(
                     local_result.db_results.clone(),
                     &reference.urls,
                     &title,
+                    &reference.authors,
                     &config,
                     &client,
                     progress.as_ref(),
@@ -1334,6 +1449,7 @@ async fn coordinator_loop(
                     all_db_results,
                     &reference.urls,
                     &title,
+                    &reference.authors,
                     &config,
                     &client,
                     progress.as_ref(),

@@ -656,12 +656,22 @@ pub(crate) fn build_database_list(
                 db: std::sync::Arc::clone(db),
             }));
         } else if let Some(ref key) = config.openalex_key {
-            databases.insert(
-                0,
-                Box::new(openalex::OpenAlex {
-                    api_key: key.clone(),
-                }),
-            );
+            // When `openalex_fallback_only` is set (the default), online
+            // OpenAlex is deliberately kept OUT of the concurrent query
+            // group — it runs only as a last-resort fallback for references
+            // nothing else found (see `apply_fallbacks` in pool.rs and the
+            // OpenAlex fallback in checker.rs). That keeps OpenAlex's strict
+            // rate limit from being hit on every reference. With the flag
+            // off, restore the legacy behavior of inserting it at the front
+            // so it's queried alongside everything else.
+            if !config.openalex_fallback_only {
+                databases.insert(
+                    0,
+                    Box::new(openalex::OpenAlex {
+                        api_key: key.clone(),
+                    }),
+                );
+            }
         }
     }
     // GovInfo (requires API key, silently skip if not configured)
@@ -761,13 +771,33 @@ mod tests {
 
     #[test]
     fn openalex_requires_key() {
+        // No key → never in the list.
         let config = Config::default();
         let dbs = build_database_list(&config, None);
         let names: Vec<&str> = dbs.iter().map(|db| db.name()).collect();
         assert!(!names.contains(&"OpenAlex"));
 
+        // Key present but `openalex_fallback_only` (the default) → still
+        // absent from the concurrent list; OpenAlex only runs as a
+        // last-resort fallback.
+        let config_fallback = Config {
+            openalex_key: Some("test-key".into()),
+            ..Config::default()
+        };
+        let names: Vec<String> = build_database_list(&config_fallback, None)
+            .iter()
+            .map(|db| db.name().to_string())
+            .collect();
+        assert!(
+            !names.iter().any(|n| n == "OpenAlex"),
+            "fallback-only must keep OpenAlex out of the concurrent list"
+        );
+
+        // Key present and fallback-only disabled → inserted at the front of
+        // the concurrent list (legacy behavior).
         let config_with_key = Config {
             openalex_key: Some("test-key".into()),
+            openalex_fallback_only: false,
             ..Config::default()
         };
         let dbs = build_database_list(&config_with_key, None);

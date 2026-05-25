@@ -70,6 +70,9 @@ pub fn apply_to_config_state(file_cfg: &ConfigFile, state: &mut ConfigState) {
                 }
             }
         }
+        if let Some(fallback_only) = db.openalex_fallback_only {
+            state.openalex_fallback_only = fallback_only;
+        }
     }
     if let Some(conc) = &file_cfg.concurrency {
         if let Some(v) = conc.num_workers {
@@ -174,6 +177,7 @@ pub fn from_config_state(state: &ConfigState) -> ConfigFile {
             } else {
                 Some(disabled)
             },
+            openalex_fallback_only: Some(state.openalex_fallback_only),
         }),
         concurrency: Some(ConcurrencyConfig {
             num_workers: Some(state.num_workers),

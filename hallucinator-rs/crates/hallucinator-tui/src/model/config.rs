@@ -89,6 +89,10 @@ pub struct ConfigState {
     pub fps: u32,
     /// SearxNG URL for web search fallback (None = disabled)
     pub searxng_url: Option<String>,
+    /// When true (the default), online OpenAlex runs only as a last-resort
+    /// fallback rather than alongside the other databases — keeps OpenAlex's
+    /// rate limit from being hit on every reference.
+    pub openalex_fallback_only: bool,
 }
 
 impl Default for ConfigState {
@@ -151,6 +155,7 @@ impl Default for ConfigState {
             theme_name: "hacker".to_string(),
             fps: 30,
             searxng_url: None,
+            openalex_fallback_only: true,
         }
     }
 }

@@ -372,9 +372,15 @@ pub async fn check_single_reference(
         }
     }
 
-    // Step 2.7: OpenAlex API fallback when offline DB is active but didn't find it
+    // Step 2.7: OpenAlex API last-resort fallback.
+    // Fires when nothing else found the ref and an OpenAlex key is set,
+    // in either of two cases: (a) `openalex_fallback_only` keeps online
+    // OpenAlex out of the concurrent group so it must run here, or (b) an
+    // offline OpenAlex index is active and the online API backfills what it
+    // missed. With `openalex_fallback_only` off and no offline index,
+    // OpenAlex already ran concurrently, so this is skipped.
     if db_result.status == Status::NotFound
-        && config.openalex_offline_db.is_some()
+        && (config.openalex_fallback_only || config.openalex_offline_db.is_some())
         && let Some(ref api_key) = config.openalex_key
     {
         let openalex = crate::db::openalex::OpenAlex {

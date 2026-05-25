@@ -36,7 +36,7 @@ impl App {
     pub(super) fn config_section_item_count(&self) -> usize {
         match self.config_state.section {
             ConfigSection::ApiKeys => 5, // OpenAlex + S2 + CrossRef Mailto + GovInfo + PatentsView
-            ConfigSection::Databases => 7 + self.config_state.disabled_dbs.len(), // DBLP + ACL + OpenAlex + cache_path + clear_cache + clear_not_found + searxng_url + toggles
+            ConfigSection::Databases => 8 + self.config_state.disabled_dbs.len(), // DBLP + ACL + OpenAlex + cache_path + clear_cache + clear_not_found + searxng_url + openalex_fallback_only + toggles
             ConfigSection::Concurrency => 5,
             ConfigSection::Display => 2, // theme + fps
         }
@@ -126,7 +126,8 @@ impl App {
                     self.config_state.edit_cursor = self.config_state.edit_buffer.len();
                     self.input_mode = InputMode::TextInput;
                 } else {
-                    // Items 7+: toggle DB (same as space)
+                    // Item 7: toggle OpenAlex fallback-only; items 8+: toggle
+                    // a database on/off — both handled by space.
                     self.handle_config_space();
                 }
             }
@@ -137,9 +138,18 @@ impl App {
     pub(super) fn handle_config_space(&mut self) {
         match self.config_state.section {
             ConfigSection::Databases
-                // Items 7+ are DB toggles (0-2: offline paths, 3: cache path, 4: clear cache, 5: clear not-found, 6: searxng url)
-                if self.config_state.item_cursor >= 7 => {
-                    let toggle_idx = self.config_state.item_cursor - 7;
+                // Item 7: "OpenAlex: ask only as last resort" toggle
+                if self.config_state.item_cursor == 7 => {
+                    self.config_state.openalex_fallback_only =
+                        !self.config_state.openalex_fallback_only;
+                    self.config_state.dirty = true;
+                }
+            ConfigSection::Databases
+                // Items 8+ are DB on/off toggles (0-2: offline paths,
+                // 3: cache path, 4: clear cache, 5: clear not-found,
+                // 6: searxng url, 7: openalex fallback-only)
+                if self.config_state.item_cursor >= 8 => {
+                    let toggle_idx = self.config_state.item_cursor - 8;
                     if let Some((_, enabled)) = self.config_state.disabled_dbs.get_mut(toggle_idx) {
                         *enabled = !*enabled;
                         self.config_state.dirty = true;

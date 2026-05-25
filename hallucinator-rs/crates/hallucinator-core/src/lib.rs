@@ -327,6 +327,19 @@ pub struct Config {
     /// flag — preserving the fake-arXiv-ID / fake-DOI hallucination
     /// signal.
     pub url_match: bool,
+    /// When true (the default), online OpenAlex is *not* queried alongside
+    /// the other databases — it runs only as a last-resort fallback for
+    /// references that no other database found (see `apply_fallbacks` in
+    /// `pool.rs` and the OpenAlex fallback in `checker.rs`). This keeps
+    /// OpenAlex's strict rate limit from being hit on every reference. Set
+    /// false to restore the legacy behavior of querying OpenAlex
+    /// concurrently with the rest (inserted at the front of the list).
+    ///
+    /// The *offline* OpenAlex index is unaffected by this flag: it's a fast
+    /// local source and always runs in the local phase. When both an
+    /// offline index and an online key are configured, the online API still
+    /// backfills references the offline index missed.
+    pub openalex_fallback_only: bool,
 }
 
 impl std::fmt::Debug for Config {
@@ -383,6 +396,7 @@ impl std::fmt::Debug for Config {
             .field("cache_positive_ttl_secs", &self.cache_positive_ttl_secs)
             .field("cache_negative_ttl_secs", &self.cache_negative_ttl_secs)
             .field("url_match", &self.url_match)
+            .field("openalex_fallback_only", &self.openalex_fallback_only)
             .finish()
     }
 }
@@ -418,6 +432,7 @@ impl Default for Config {
             cache_positive_ttl_secs: DEFAULT_POSITIVE_TTL.as_secs(),
             cache_negative_ttl_secs: DEFAULT_NEGATIVE_TTL.as_secs(),
             url_match: false,
+            openalex_fallback_only: true,
         }
     }
 }

@@ -404,11 +404,33 @@ fn render_databases(lines: &mut Vec<Line>, config: &ConfigState, theme: &Theme, 
         Span::styled(display_val, val_style),
     ]));
 
+    // Item 7: OpenAlex fallback-only toggle
+    let cursor = if config.item_cursor == 7 { "> " } else { "  " };
+    let check = if config.openalex_fallback_only {
+        "[\u{2713}]"
+    } else {
+        "[ ]"
+    };
+    let style = if config.openalex_fallback_only {
+        Style::default().fg(theme.verified)
+    } else {
+        Style::default().fg(theme.dim)
+    };
+    lines.push(Line::from(vec![
+        Span::styled(format!("  {}{} ", cursor, check), style),
+        Span::styled(
+            "OpenAlex: ask only as last resort (avoids rate limits)".to_string(),
+            Style::default().fg(theme.text),
+        ),
+    ]));
+
     lines.push(Line::from(""));
 
-    // Items 7..N: DB toggles
+    // Items 8..N: DB toggles
     for (i, (name, enabled)) in config.disabled_dbs.iter().enumerate() {
-        let item_idx = i + 7; // offset by 7 for DBLP + ACL + OpenAlex + cache_path + clear_cache + clear_not_found + searxng_url
+        // offset: DBLP + ACL + OpenAlex paths, cache_path, clear_cache,
+        // clear_not_found, searxng_url, openalex_fallback_only
+        let item_idx = i + 8;
         let cursor = if config.item_cursor == item_idx {
             "> "
         } else {
