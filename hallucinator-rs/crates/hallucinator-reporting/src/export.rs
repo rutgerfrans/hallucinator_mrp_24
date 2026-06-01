@@ -1,27 +1,33 @@
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
 
 use hallucinator_core::{CheckStats, DbStatus, MismatchKind, Status, ValidationResult};
 
-use crate::types::{ExportFormat, FpReason, PaperVerdict, ReportPaper, ReportRef};
+use crate::types::{ExportFormat, FpReason, PaperVerdict, RateLimitStats, ReportPaper, ReportRef};
 
 /// Export results for a set of papers to the given path.
 ///
 /// `ref_states` is a parallel slice to `papers` — `ref_states[i]` are the ReportRefs
 /// for `papers[i]`. This is used to include FP reason overrides in the output.
+///
+/// `rl_stats` carries batch-level 429 hit counts per database. When `Some`, the
+/// export includes a rate-limit summary section. Pass `None` when loading from an
+/// existing JSON (e.g. TUI export) where live limiter state is unavailable.
 pub fn export_results(
     papers: &[ReportPaper<'_>],
     ref_states: &[&[ReportRef]],
     format: ExportFormat,
     path: &Path,
     problematic_only: bool,
+    rl_stats: Option<&RateLimitStats>,
 ) -> Result<(), String> {
     let content = match format {
-        ExportFormat::Json => export_json(papers, ref_states, problematic_only),
-        ExportFormat::Csv => export_csv(papers, ref_states, problematic_only),
-        ExportFormat::Markdown => export_markdown(papers, ref_states, problematic_only),
-        ExportFormat::Text => export_text(papers, ref_states, problematic_only),
-        ExportFormat::Html => export_html(papers, ref_states, problematic_only),
+        ExportFormat::Json => export_json(papers, ref_states, problematic_only, rl_stats),
+        ExportFormat::Csv => export_csv(papers, ref_states, problematic_only, rl_stats),
+        ExportFormat::Markdown => export_markdown(papers, ref_states, problematic_only, rl_stats),
+        ExportFormat::Text => export_text(papers, ref_states, problematic_only, rl_stats),
+        ExportFormat::Html => export_html(papers, ref_states, problematic_only, rl_stats),
     };
 
     let mut file =
@@ -176,6 +182,23 @@ fn adjusted_stats(paper: &ReportPaper<'_>, _refs: &[ReportRef]) -> CheckStats {
     paper.stats.clone()
 }
 
+/// Count per-DB rate-limit hits for a single paper from its db_results.
+///
+/// Only counts entries whose final status is `RateLimited` (i.e. a 429 that
+/// was NOT successfully retried). For total 429 hits including retried-and-
+/// recovered ones, see `RateLimitStats` from the live rate limiters.
+fn paper_rate_limit_hits<'a>(paper: &'a ReportPaper<'a>) -> HashMap<&'a str, u64> {
+    let mut counts: HashMap<&'a str, u64> = HashMap::new();
+    for result in paper.results.iter().flatten() {
+        for db in &result.db_results {
+            if db.status == DbStatus::RateLimited {
+                *counts.entry(db.db_name.as_str()).or_insert(0) += 1;
+            }
+        }
+    }
+    counts
+}
+
 fn json_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -214,8 +237,9 @@ pub fn export_json(
     papers: &[ReportPaper<'_>],
     ref_states: &[&[ReportRef]],
     problematic_only: bool,
+    rl_stats: Option<&RateLimitStats>,
 ) -> String {
-    let mut out = String::from("[\n");
+    let mut papers_json = String::from("[\n");
     for (pi, paper) in papers.iter().enumerate() {
         let paper_refs = ref_states.get(pi).copied().unwrap_or(&[]);
         let s = adjusted_stats(paper, paper_refs);
@@ -223,10 +247,23 @@ pub fn export_json(
             Some(_) => json_str(verdict_str(paper.verdict)),
             None => "null".to_string(),
         };
-        out.push_str(&format!(
-            "  {{\n    \"filename\": {},\n    \"verdict\": {},\n    \"stats\": {{\n      \"total\": {},\n      \"verified\": {},\n      \"not_found\": {},\n      \"author_mismatch\": {},\n      \"retracted\": {},\n      \"skipped\": {},\n      \"problematic_pct\": {:.1}\n    }},\n    \"references\": [\n",
+
+        // Per-paper rate limit hits derived from db_results (final-state 429s only).
+        let rl_hits = paper_rate_limit_hits(paper);
+        let rl_hits_json = {
+            let mut items: Vec<String> = rl_hits
+                .iter()
+                .map(|(db, count)| format!("{}: {}", json_str(db), count))
+                .collect();
+            items.sort(); // deterministic order
+            format!("{{{}}}", items.join(", "))
+        };
+
+        papers_json.push_str(&format!(
+            "  {{\n    \"filename\": {},\n    \"verdict\": {},\n    \"rate_limited_dbs\": {},\n    \"stats\": {{\n      \"total\": {},\n      \"verified\": {},\n      \"not_found\": {},\n      \"author_mismatch\": {},\n      \"retracted\": {},\n      \"skipped\": {},\n      \"problematic_pct\": {:.1}\n    }},\n    \"references\": [\n",
             json_str(paper.filename),
             verdict_json,
+            rl_hits_json,
             s.total, s.verified, s.not_found, s.author_mismatch, s.retracted, s.skipped,
             problematic_pct(&s),
         ));
@@ -402,20 +439,53 @@ pub fn export_json(
         } // end if !problematic_only
 
         for (ei, entry) in entries.iter().enumerate() {
-            out.push_str(entry);
+            papers_json.push_str(entry);
             if ei + 1 < entries.len() {
-                out.push(',');
+                papers_json.push(',');
             }
-            out.push('\n');
+            papers_json.push('\n');
         }
-        out.push_str("    ]\n  }");
+        papers_json.push_str("    ]\n  }");
         if pi + 1 < papers.len() {
-            out.push(',');
+            papers_json.push(',');
         }
-        out.push('\n');
+        papers_json.push('\n');
     }
-    out.push_str("]\n");
-    out
+    papers_json.push_str("]");
+
+    // When batch rate-limit stats are available, wrap in an object so the
+    // summary sits alongside the papers array rather than inside any single
+    // paper. Without stats, emit the bare array for backward compatibility
+    // with existing JSON consumers (the TUI's serde loader expects an array).
+    match rl_stats {
+        None => {
+            papers_json.push('\n');
+            papers_json
+        }
+        Some(stats) => {
+            let total = stats.total_hits();
+            let mut db_items: Vec<String> = stats
+                .hits_per_db
+                .iter()
+                .map(|(db, count)| format!("    {}: {}", json_str(db), count))
+                .collect();
+            db_items.sort();
+            let mut out = String::from("{\n  \"papers\": ");
+            out.push_str(&papers_json);
+            out.push_str(",\n  \"rate_limit_summary\": {\n");
+            out.push_str(&format!("    \"total_429_hits\": {},\n", total));
+            out.push_str("    \"hits_per_db\": {\n");
+            for (i, item) in db_items.iter().enumerate() {
+                out.push_str(item);
+                if i + 1 < db_items.len() {
+                    out.push(',');
+                }
+                out.push('\n');
+            }
+            out.push_str("    }\n  }\n}\n");
+            out
+        }
+    }
 }
 
 fn csv_escape(s: &str) -> String {
@@ -430,9 +500,10 @@ fn export_csv(
     papers: &[ReportPaper<'_>],
     ref_states: &[&[ReportRef]],
     problematic_only: bool,
+    rl_stats: Option<&RateLimitStats>,
 ) -> String {
     let mut out = String::from(
-        "Filename,Verdict,Ref#,Title,Status,EffectiveStatus,FpReason,Source,Retracted,Authors,FoundAuthors,PaperURL,DOI,ArxivID,FailedDBs\n",
+        "Filename,Verdict,Ref#,Title,Status,EffectiveStatus,FpReason,Source,Retracted,Authors,FoundAuthors,PaperURL,DOI,ArxivID,FailedDBs,RateLimitedDBs\n",
     );
     for (pi, paper) in papers.iter().enumerate() {
         let verdict = verdict_str(paper.verdict);
@@ -463,8 +534,15 @@ fn export_csv(
                 .map(|a| a.arxiv_id.as_str())
                 .unwrap_or("");
             let failed = r.failed_dbs.join("; ");
+            let rate_limited: Vec<&str> = r
+                .db_results
+                .iter()
+                .filter(|db| db.status == DbStatus::RateLimited)
+                .map(|db| db.db_name.as_str())
+                .collect();
+            let rate_limited_str = rate_limited.join("; ");
             out.push_str(&format!(
-                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
                 csv_escape(paper.filename),
                 csv_escape(verdict),
                 sref.ref_num,
@@ -480,6 +558,7 @@ fn export_csv(
                 csv_escape(doi),
                 csv_escape(arxiv),
                 csv_escape(&failed),
+                csv_escape(&rate_limited_str),
             ));
         }
         // Add skipped refs (excluded in problematic-only mode)
@@ -487,7 +566,7 @@ fn export_csv(
             for rs in paper_refs {
                 if let Some(skip) = &rs.skip_info {
                     out.push_str(&format!(
-                        "{},{},{},{},skipped,skipped,{},,,,,,,,\n",
+                        "{},{},{},{},skipped,skipped,{},,,,,,,,,\n",
                         csv_escape(paper.filename),
                         csv_escape(verdict),
                         rs.index + 1,
@@ -498,6 +577,20 @@ fn export_csv(
             }
         } // end if !problematic_only
     }
+
+    // Append batch rate-limit summary when available.
+    if let Some(stats) = rl_stats
+        && stats.total_hits() > 0
+    {
+        out.push_str("\n# Rate Limit Summary (429 hits per database across batch)\n");
+        out.push_str("Database,Total429Hits\n");
+        let mut db_items: Vec<(&String, &u64)> = stats.hits_per_db.iter().collect();
+        db_items.sort_by_key(|(db, _)| db.as_str());
+        for (db, count) in db_items {
+            out.push_str(&format!("{},{}\n", csv_escape(db), count));
+        }
+    }
+
     out
 }
 
@@ -516,6 +609,7 @@ fn export_markdown(
     papers: &[ReportPaper<'_>],
     ref_states: &[&[ReportRef]],
     problematic_only: bool,
+    rl_stats: Option<&RateLimitStats>,
 ) -> String {
     let mut out = String::from("# Hallucinator Results\n\n");
 
@@ -647,6 +741,26 @@ fn export_markdown(
 
         out.push_str("---\n\n");
     }
+
+    // Batch rate-limit summary
+    if let Some(stats) = rl_stats
+        && stats.total_hits() > 0
+    {
+        out.push_str("## Rate Limit Summary\n\n");
+        out.push_str(&format!(
+            "**{}** total 429 responses received during this batch run.\n\n",
+            stats.total_hits()
+        ));
+        out.push_str("| Database | 429 Hits |\n");
+        out.push_str("|----------|----------|\n");
+        let mut db_items: Vec<(&String, &u64)> = stats.hits_per_db.iter().collect();
+        db_items.sort_by_key(|(db, _)| db.as_str());
+        for (db, count) in db_items {
+            out.push_str(&format!("| {} | {} |\n", md_escape(db), count));
+        }
+        out.push('\n');
+    }
+
     out
 }
 
@@ -748,6 +862,7 @@ fn export_text(
     papers: &[ReportPaper<'_>],
     ref_states: &[&[ReportRef]],
     problematic_only: bool,
+    rl_stats: Option<&RateLimitStats>,
 ) -> String {
     let mut out = String::from("Hallucinator Results\n");
     out.push_str(&"=".repeat(60));
@@ -885,6 +1000,26 @@ fn export_text(
             }
         }
     }
+
+    // Batch rate-limit summary
+    if let Some(stats) = rl_stats
+        && stats.total_hits() > 0
+    {
+        out.push('\n');
+        out.push_str("Rate Limit Summary\n");
+        out.push_str(&"-".repeat(40));
+        out.push('\n');
+        out.push_str(&format!(
+            "Total 429 responses: {}\n",
+            stats.total_hits()
+        ));
+        let mut db_items: Vec<(&String, &u64)> = stats.hits_per_db.iter().collect();
+        db_items.sort_by_key(|(db, _)| db.as_str());
+        for (db, count) in db_items {
+            out.push_str(&format!("  {}: {} hit(s)\n", db, count));
+        }
+    }
+
     out
 }
 
@@ -899,6 +1034,7 @@ fn export_html(
     papers: &[ReportPaper<'_>],
     ref_states: &[&[ReportRef]],
     problematic_only: bool,
+    rl_stats: Option<&RateLimitStats>,
 ) -> String {
     let mut out = String::with_capacity(16384);
 
@@ -1257,6 +1393,29 @@ body.hide-verified .ref-card[data-status="verified"] { display: none; }
     }
     out.push_str("</div>\n"); // close #papers
 
+    // Rate limit summary section (only when batch stats are provided and non-zero)
+    if let Some(stats) = rl_stats
+        && stats.total_hits() > 0
+    {
+        out.push_str("<h2 style=\"color:var(--yellow)\">Rate Limit Summary</h2>\n");
+        out.push_str("<div class=\"stats\">\n");
+        out.push_str(&format!(
+            "<div class=\"stat-card mismatch\"><span class=\"number\">{}</span><span class=\"label\">Total 429 Hits</span></div>\n",
+            stats.total_hits()
+        ));
+        let mut db_items: Vec<(&String, &u64)> = stats.hits_per_db.iter().collect();
+        db_items.sort_by_key(|(db, _)| db.as_str());
+        for (db, count) in db_items {
+            out.push_str(&format!(
+                "<div class=\"stat-card mismatch\"><span class=\"number\">{}</span><span class=\"label\">{}</span></div>\n",
+                count,
+                html_escape(db),
+            ));
+        }
+        out.push_str("</div>\n");
+        out.push_str("<p style=\"color:var(--dim);font-size:0.85rem\">Counts include successful retries after 429. Per-paper per-reference detail is in the <code>rate_limited_dbs</code> field of JSON exports.</p>\n");
+    }
+
     // Sort script. Use getAttribute('data-'+key) instead of
     // dataset[key]: dataset only exposes camelCased keys, so
     // dataset['not-found'] is undefined even though the attribute
@@ -1598,7 +1757,7 @@ mod tests {
         };
         let paper = make_paper("test.pdf", &stats, &results);
         let ref_states: Vec<&[ReportRef]> = vec![&[]];
-        let json = export_json(&[paper], &ref_states, false);
+        let json = export_json(&[paper], &ref_states, false, None);
         assert!(
             json.contains("\"status\": \"skipped\""),
             "expected status=skipped in JSON, got:\n{}",
@@ -1637,7 +1796,7 @@ mod tests {
         };
         let paper = make_paper("test.pdf", &stats, &results);
         let ref_states: Vec<&[ReportRef]> = vec![&[]];
-        let json = export_json(&[paper], &ref_states, false);
+        let json = export_json(&[paper], &ref_states, false, None);
         assert!(
             json.contains("\"status\": \"not_found\""),
             "expected status=not_found in JSON, got:\n{}",
@@ -1975,7 +2134,7 @@ mod tests {
 
     #[test]
     fn test_json_empty_papers() {
-        let out = export_json(&[], &[], false);
+        let out = export_json(&[], &[], false, None);
         assert_eq!(out, "[\n]\n");
     }
 
@@ -1991,7 +2150,7 @@ mod tests {
         let paper = make_paper("test.pdf", &stats, &results);
         let refs = vec![make_ref(0, "Good Paper")];
         let ref_slices: &[&[ReportRef]] = &[&refs];
-        let out = export_json(&[paper], ref_slices, false);
+        let out = export_json(&[paper], ref_slices, false, None);
         // Should be valid-ish JSON structure
         assert!(out.starts_with("[\n"));
         assert!(out.ends_with("]\n"));
@@ -2012,7 +2171,7 @@ mod tests {
         let paper = make_paper("test.pdf", &stats, &results);
         let refs = vec![make_ref_skipped(0, "Short", "short_title")];
         let ref_slices: &[&[ReportRef]] = &[&refs];
-        let out = export_json(&[paper], ref_slices, false);
+        let out = export_json(&[paper], ref_slices, false, None);
         assert!(out.contains("\"status\": \"skipped\""));
         assert!(out.contains("\"skip_reason\": \"short_title\""));
     }
@@ -2029,7 +2188,7 @@ mod tests {
         let paper = make_paper("test.pdf", &stats, &results);
         let refs = vec![make_ref_fp(0, "FP Ref", FpReason::ExistsElsewhere)];
         let ref_slices: &[&[ReportRef]] = &[&refs];
-        let out = export_json(&[paper], ref_slices, false);
+        let out = export_json(&[paper], ref_slices, false, None);
         assert!(out.contains("\"effective_status\": \"verified\""));
         assert!(out.contains("\"status\": \"not_found\""));
         assert!(out.contains("\"fp_reason\": \"exists_elsewhere\""));
@@ -2037,11 +2196,11 @@ mod tests {
 
     #[test]
     fn test_csv_header() {
-        let out = export_csv(&[], &[], false);
+        let out = export_csv(&[], &[], false, None);
         let first_line = out.lines().next().unwrap();
         assert_eq!(
             first_line,
-            "Filename,Verdict,Ref#,Title,Status,EffectiveStatus,FpReason,Source,Retracted,Authors,FoundAuthors,PaperURL,DOI,ArxivID,FailedDBs",
+            "Filename,Verdict,Ref#,Title,Status,EffectiveStatus,FpReason,Source,Retracted,Authors,FoundAuthors,PaperURL,DOI,ArxivID,FailedDBs,RateLimitedDBs",
         );
     }
 
@@ -2057,7 +2216,7 @@ mod tests {
         let paper = make_paper("test.pdf", &stats, &results);
         let refs = vec![make_ref(0, "My Paper")];
         let ref_slices: &[&[ReportRef]] = &[&refs];
-        let out = export_csv(&[paper], ref_slices, false);
+        let out = export_csv(&[paper], ref_slices, false, None);
         let lines: Vec<&str> = out.lines().collect();
         assert_eq!(lines.len(), 2); // header + 1 data row
         assert!(lines[1].starts_with("test.pdf,"));
@@ -2079,7 +2238,7 @@ mod tests {
         let paper = make_paper("paper.pdf", &stats, &results);
         let refs = vec![make_ref(0, "Good"), make_ref(1, "Bad")];
         let ref_slices: &[&[ReportRef]] = &[&refs];
-        let out = export_markdown(&[paper], ref_slices, false);
+        let out = export_markdown(&[paper], ref_slices, false, None);
         assert!(out.contains("# Hallucinator Results"));
         assert!(out.contains("## paper.pdf"));
         assert!(out.contains("**2** references"));
@@ -2099,7 +2258,7 @@ mod tests {
         let paper = make_paper("f.pdf", &stats, &results);
         let refs = vec![make_ref(0, "Paper")];
         let ref_slices: &[&[ReportRef]] = &[&refs];
-        let out = export_text(&[paper], ref_slices, false);
+        let out = export_text(&[paper], ref_slices, false, None);
         assert!(out.starts_with("Hallucinator Results\n===="));
         assert!(out.contains("f.pdf"));
         assert!(out.contains("1 total"));
@@ -2118,7 +2277,7 @@ mod tests {
         let paper = make_paper("f.pdf", &stats, &results);
         let refs = vec![make_ref(0, "Paper")];
         let ref_slices: &[&[ReportRef]] = &[&refs];
-        let out = export_html(&[paper], ref_slices, false);
+        let out = export_html(&[paper], ref_slices, false, None);
         assert!(out.contains("<!DOCTYPE html>"));
         assert!(out.contains("stat-card"));
         assert!(out.contains("</html>"));
@@ -2142,7 +2301,7 @@ mod tests {
         let paper = make_paper("a.pdf", &stats, &results);
         let refs = vec![make_ref(0, "X")];
         let ref_slices: &[&[ReportRef]] = &[&refs];
-        let out = export_html(&[paper], ref_slices, false);
+        let out = export_html(&[paper], ref_slices, false, None);
 
         assert!(
             out.contains("getAttribute('data-'+key)"),
@@ -2187,7 +2346,7 @@ mod tests {
             make_ref(1, "Real Hallucination"),
         ];
         let ref_slices: &[&[ReportRef]] = &[&refs];
-        let out = export_html(&[paper], ref_slices, false);
+        let out = export_html(&[paper], ref_slices, false, None);
 
         // The url_check_skipped ref renders as "Skipped" badge.
         let url_idx = out.find("Github URL Ref").expect("title in HTML");
@@ -2227,7 +2386,7 @@ mod tests {
         let paper = make_paper("test.pdf", &stats, &results);
         let refs = vec![make_ref_fp(0, "Marked Safe NF", FpReason::BrokenParse)];
         let ref_slices: &[&[ReportRef]] = &[&refs];
-        let out = export_html(&[paper], ref_slices, false);
+        let out = export_html(&[paper], ref_slices, false, None);
 
         // The ref's badge should be "Verified" — NOT "Not Found".
         assert!(
@@ -2256,7 +2415,7 @@ mod tests {
         let paper = make_paper("p.pdf", &stats, &results);
         let refs = vec![make_ref(0, "R")];
         let ref_slices: &[&[ReportRef]] = &[&refs];
-        let out = export_html(&[paper], ref_slices, false);
+        let out = export_html(&[paper], ref_slices, false, None);
 
         assert!(
             out.contains(
@@ -2289,7 +2448,7 @@ mod tests {
             make_ref_fp(2, "Marked Safe Ref 2", FpReason::ExistsElsewhere),
         ];
         let ref_slices: &[&[ReportRef]] = &[&refs];
-        let out = export_html(&[paper], ref_slices, false);
+        let out = export_html(&[paper], ref_slices, false, None);
 
         assert!(
             out.contains("<span class=\"sublabel\">2 marked safe</span>"),
@@ -2316,7 +2475,7 @@ mod tests {
         let paper = make_paper("p.pdf", &stats, &results);
         let refs = vec![make_ref(0, "Verified Ref")];
         let ref_slices: &[&[ReportRef]] = &[&refs];
-        let out = export_html(&[paper], ref_slices, false);
+        let out = export_html(&[paper], ref_slices, false, None);
 
         for label in &[
             "Not Found",
@@ -2348,7 +2507,7 @@ mod tests {
 
         let empty_refs: &[ReportRef] = &[];
         let ref_slices: &[&[ReportRef]] = &[empty_refs, empty_refs];
-        let out = export_html(&[safe_paper, quest_paper], ref_slices, false);
+        let out = export_html(&[safe_paper, quest_paper], ref_slices, false, None);
         assert!(out.contains("badge verified\">SAFE</span>"));
         assert!(out.contains("badge not-found\">?!</span>"));
     }
@@ -2390,7 +2549,7 @@ mod tests {
 
         // With problematic_only=true, verified (including DOI/arXiv issues),
         // FP-overridden, and skipped should be excluded
-        let out = export_json(&[paper], ref_slices, true);
+        let out = export_json(&[paper], ref_slices, true, None);
         assert!(out.contains("\"title\": \"Bad Paper\""));
         assert!(!out.contains("\"title\": \"Good Paper\""));
         assert!(!out.contains("\"title\": \"FP Paper\""));
@@ -2416,7 +2575,7 @@ mod tests {
         let paper = make_paper("test.pdf", &stats, &results);
         let refs = vec![make_ref(0, "Good"), make_ref(1, "Bad")];
         let ref_slices: &[&[ReportRef]] = &[&refs];
-        let out = export_csv(&[paper], ref_slices, true);
+        let out = export_csv(&[paper], ref_slices, true, None);
         let lines: Vec<&str> = out.lines().collect();
         assert_eq!(lines.len(), 2); // header + 1 (only "Bad")
         assert!(lines[1].contains("Bad"));
@@ -2438,7 +2597,7 @@ mod tests {
         let paper = make_paper("test.pdf", &stats, &results);
         let refs = vec![make_ref(0, "Good"), make_ref(1, "Bad")];
         let ref_slices: &[&[ReportRef]] = &[&refs];
-        let out = export_markdown(&[paper], ref_slices, true);
+        let out = export_markdown(&[paper], ref_slices, true, None);
         assert!(out.contains("Bad"));
         assert!(!out.contains("### Verified References"));
     }
@@ -2458,7 +2617,7 @@ mod tests {
         let paper = make_paper("test.pdf", &stats, &results);
         let refs = vec![make_ref(0, "Good"), make_ref(1, "Bad")];
         let ref_slices: &[&[ReportRef]] = &[&refs];
-        let out = export_text(&[paper], ref_slices, true);
+        let out = export_text(&[paper], ref_slices, true, None);
         assert!(out.contains("Bad"));
         assert!(!out.contains("Good"));
     }
@@ -2496,7 +2655,7 @@ mod tests {
         ];
         let ref_slices: &[&[ReportRef]] = &[&refs];
 
-        let out = export_html(&[paper], ref_slices, true);
+        let out = export_html(&[paper], ref_slices, true, None);
 
         // "Bad Paper" (not found) should be present
         assert!(

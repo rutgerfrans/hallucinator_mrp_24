@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use hallucinator_core::{CheckStats, ValidationResult};
 
 /// Reason a user marked a reference as a false positive.
@@ -164,4 +166,20 @@ pub struct ReportRef {
 /// Information about why a reference was skipped.
 pub struct SkipInfo {
     pub reason: String,
+}
+
+/// Rate-limit statistics accumulated over a batch run.
+///
+/// `hits_per_db` counts every 429 response received per database, including
+/// those that were successfully retried — so the count reflects actual server
+/// throttling events, not just the number of references left in a `RateLimited`
+/// final state.
+pub struct RateLimitStats {
+    pub hits_per_db: HashMap<String, u64>,
+}
+
+impl RateLimitStats {
+    pub fn total_hits(&self) -> u64 {
+        self.hits_per_db.values().sum()
+    }
 }

@@ -1004,6 +1004,10 @@ async fn check(
         })
         .collect();
 
+    // Retain a handle to the rate limiters so we can report 429 hit counts
+    // after check_references consumes `config`.
+    let rate_limiters = Arc::clone(&config.rate_limiters);
+
     let results =
         hallucinator_core::check_references(extraction.references, config, progress_cb, cancel)
             .await;
@@ -1028,12 +1032,19 @@ async fn check(
             verdict: None,
         };
         let ref_slices: &[&[hallucinator_reporting::ReportRef]] = &[&report_refs];
+        let rl_hits = rate_limiters.hit_counts();
+        let rl_stats = if rl_hits.is_empty() {
+            None
+        } else {
+            Some(hallucinator_reporting::RateLimitStats { hits_per_db: rl_hits })
+        };
         hallucinator_reporting::export_results(
             &[paper],
             ref_slices,
             hallucinator_reporting::ExportFormat::Json,
             &json_path,
             false,
+            rl_stats.as_ref(),
         )
         .map_err(|e| anyhow::anyhow!("{}", e))?;
         eprintln!("Results saved to {}", json_path.display());
@@ -1219,12 +1230,19 @@ async fn run_archive_check(
             .collect();
         let ref_slices: Vec<&[hallucinator_reporting::ReportRef]> =
             json_data.iter().map(|d| d.report_refs.as_slice()).collect();
+        let rl_hits = config.rate_limiters.hit_counts();
+        let rl_stats = if rl_hits.is_empty() {
+            None
+        } else {
+            Some(hallucinator_reporting::RateLimitStats { hits_per_db: rl_hits })
+        };
         hallucinator_reporting::export_results(
             &report_papers,
             &ref_slices,
             hallucinator_reporting::ExportFormat::Json,
             &json_path,
             false,
+            rl_stats.as_ref(),
         )
         .map_err(|e| anyhow::anyhow!("{}", e))?;
         eprintln!("Results saved to {}", json_path.display());

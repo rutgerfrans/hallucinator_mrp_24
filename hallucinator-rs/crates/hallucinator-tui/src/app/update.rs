@@ -309,6 +309,7 @@ impl App {
                             self.export_state.format,
                             std::path::Path::new(&path),
                             self.export_state.problematic_only,
+                            None, // rate-limit stats not available in TUI export
                         ) {
                             Ok(()) => {
                                 self.export_state.message = Some(format!("Saved to {}", path));

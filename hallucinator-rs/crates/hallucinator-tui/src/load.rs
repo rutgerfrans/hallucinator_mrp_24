@@ -363,9 +363,16 @@ fn convert_loaded(loaded: LoadedFile) -> (PaperState, Vec<RefState>) {
 // Public API
 // ---------------------------------------------------------------------------
 
+/// Wrapped export format emitted when batch rate-limit statistics are available.
+#[derive(Deserialize)]
+struct WrappedExport {
+    papers: Vec<LoadedFile>,
+}
+
 /// Load previously saved results from a JSON file.
 ///
-/// Handles both formats:
+/// Handles all three formats:
+/// - **Wrapped export format**: `{"papers": [...], "rate_limit_summary": {...}}` (batch runs with rate-limit data)
 /// - **Export format**: JSON array of paper objects (from TUI export or `--load`)
 /// - **Persistence format**: Single JSON object (from auto-save in `~/.cache/hallucinator/runs/`)
 pub fn load_results_file(path: &Path) -> Result<Vec<(PaperState, Vec<RefState>)>, String> {
@@ -375,11 +382,13 @@ pub fn load_results_file(path: &Path) -> Result<Vec<(PaperState, Vec<RefState>)>
     let loaded_files: Vec<LoadedFile> =
         if let Ok(arr) = serde_json::from_str::<Vec<LoadedFile>>(&content) {
             arr
+        } else if let Ok(wrapped) = serde_json::from_str::<WrappedExport>(&content) {
+            wrapped.papers
         } else if let Ok(single) = serde_json::from_str::<LoadedFile>(&content) {
             vec![single]
         } else {
             return Err(
-                "Invalid JSON: expected export format (array) or persistence format (object)"
+                "Invalid JSON: expected export format (array), wrapped batch format (object with \"papers\" key), or persistence format (object)"
                     .to_string(),
             );
         };
@@ -513,6 +522,7 @@ mod export_regression_tests {
             ExportFormat::Html,
             &html_path,
             false,
+            None,
         )
         .expect("export html");
 

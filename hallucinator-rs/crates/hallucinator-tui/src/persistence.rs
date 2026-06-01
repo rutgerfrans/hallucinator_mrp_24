@@ -51,7 +51,7 @@ pub fn save_paper_results(
             fp_reason: rs.fp_reason,
         })
         .collect();
-    let json = hallucinator_reporting::export_json(&[report_paper], &[&report_refs], false);
+    let json = hallucinator_reporting::export_json(&[report_paper], &[&report_refs], false, None);
 
     if let Ok(mut file) = std::fs::File::create(&out_path) {
         let _ = file.write_all(json.as_bytes());

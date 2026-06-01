@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;
@@ -61,6 +61,8 @@ pub struct AdaptiveDbLimiter {
     current_factor: AtomicU32,
     /// Timestamp of the last 429 response.
     last_429: std::sync::Mutex<Option<Instant>>,
+    /// Total number of 429 responses received (including retried attempts).
+    hit_count: AtomicU64,
 }
 
 impl AdaptiveDbLimiter {
@@ -73,6 +75,7 @@ impl AdaptiveDbLimiter {
             base_period: period,
             current_factor: AtomicU32::new(1),
             last_429: std::sync::Mutex::new(None),
+            hit_count: AtomicU64::new(0),
         }
     }
 
@@ -94,6 +97,8 @@ impl AdaptiveDbLimiter {
 
     /// Called when a 429 is received. Doubles the slowdown factor and swaps the governor.
     pub fn on_rate_limited(&self) {
+        self.hit_count.fetch_add(1, Ordering::Relaxed);
+
         if let Ok(mut last) = self.last_429.lock() {
             *last = Some(Instant::now());
         }
@@ -211,6 +216,22 @@ impl RateLimiters {
             .get(db_name)
             .map(|l| l.current_factor.load(Ordering::Relaxed))
             .unwrap_or(1)
+    }
+
+    /// Return the total 429 hit counts per database across the run.
+    /// Only includes databases that received at least one 429.
+    pub fn hit_counts(&self) -> HashMap<String, u64> {
+        self.limiters
+            .iter()
+            .filter_map(|(name, lim)| {
+                let count = lim.hit_count.load(Ordering::Relaxed);
+                if count > 0 {
+                    Some(((*name).to_string(), count))
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 }
 
