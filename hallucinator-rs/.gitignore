@@ -3,6 +3,7 @@
 *.db
 *.db-shm
 *.db-wal
+*.zip
 .tmp*
 test-output.txt
 crates/hallucinator-python/Cargo.lock
