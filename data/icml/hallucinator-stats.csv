@@ -1,3 +1,3 @@
 Dataset,Papers,Checkable_Refs,Refs_Per_Paper,Flagged,Confirmed_Hallucinated,False_Positive,Extraction_Error,Verified,Flagged_Rate,Hallucination_Rate,False_Positive_Rate,Extraction_Error_Rate
-Pre,280,12523,44.73,1730,3,412,1315,10793,0.1381,0.0002,0.0329,0.1050
-Post,209,14633,70.01,4131,24,382,3725,10502,0.2823,0.0016,0.0261,0.2546
+Pre,280,12523,44.73,1730,2,413,1315,10793,0.1381,0.0002,0.0330,0.1050
+Post,209,14633,70.01,4131,22,384,3725,10502,0.2823,0.0015,0.0262,0.2546

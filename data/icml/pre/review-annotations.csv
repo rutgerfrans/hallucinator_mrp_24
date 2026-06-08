@@ -8157,7 +8157,7 @@ Filename,RefIndex,RefNum,Title,PredictedStatus,ManualLabel
 "pre.zip/hassani20a.pdf","65","66","Position-aware graph neural networks","verified",""
 "pre.zip/hassani20a.pdf","66","67","Deep learning on graphs: A survey","verified",""
 "pre.zip/hassani20a.pdf","67","68","Semi-supervised learning using gaussian fields and harmonic functions","verified",""
-"pre.zip/hinder20a.pdf","16","17","Covariate shift and local learning by distribution matching","not_found","hallucinated"
+"pre.zip/hinder20a.pdf","16","17","Covariate shift and local learning by distribution matching","not_found","real"
 "pre.zip/hinder20a.pdf","0","1","A survey of methods for time series change point detection","verified",""
 "pre.zip/hinder20a.pdf","1","2","Rddm: Reactive drift detection method","verified",""
 "pre.zip/hinder20a.pdf","2","3","Learning from time-changing data with adaptive windowing","verified",""
