@@ -559,17 +559,6 @@ async fn apply_fallbacks(
     };
 
     // ── OpenAlex last-resort fallback ──────────────────────────────────
-    //
-    // When `openalex_fallback_only` is set (the default), online OpenAlex is
-    // kept out of the concurrent query group (see `build_database_list`) and
-    // consulted only here — for references nothing else verified. This is
-    // also the backfill path when an offline OpenAlex index is active but
-    // missed the reference. Either way it runs at most once per NotFound
-    // ref, which is what keeps OpenAlex's strict rate limit from being hit
-    // on every reference. Routed through the rate limiter + cache (keyed by
-    // the backend's "OpenAlex" name) like any other DB query. Runs before
-    // the URL/Wayback/web-search fallbacks because a metadata hit (with
-    // author verification) is a stronger signal than mere URL liveness.
     if status == Status::NotFound
         && let Some(ref api_key) = config.openalex_key
         && (config.openalex_fallback_only || config.openalex_offline_db.is_some())

@@ -145,8 +145,7 @@ impl PyValidatorConfig {
             )),
             url_match: self.url_match,
             // OpenAlex runs as a last-resort fallback rather than alongside
-            // the other databases, to avoid hitting its rate limit on every
-            // reference. Not exposed as a Python-settable field.
+            // the other databases.
             openalex_fallback_only: true,
         })
     }

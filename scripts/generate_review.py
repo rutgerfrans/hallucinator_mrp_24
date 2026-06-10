@@ -1,11 +1,6 @@
 #!/usr/bin/env python3
-"""
-Generate a standalone HTML review tool from hallucinator JSON results.
-
-Usage:
-    python scripts/generate_review.py data/icml/post/hallucinator-results.json --output review-post.html
-    python scripts/generate_review.py data/icml/pre/hallucinator-results.json data/icml/post/hallucinator-results.json --output review.html
-"""
+#python scripts/generate_review.py data/icml/post/hallucinator-results.json --output review-post.html
+#python scripts/generate_review.py data/icml/pre/hallucinator-results.json data/icml/post/hallucinator-results.json --output review.html
 
 import json
 import argparse
@@ -31,7 +26,6 @@ def load_refs(json_path: Path) -> list:
                 "t": ref.get("title", ""),
                 "s": status,
             }
-            # Only include optional fields when non-empty to keep JSON slim
             raw = ref.get("raw_citation", "")
             if raw:
                 entry["r"] = raw

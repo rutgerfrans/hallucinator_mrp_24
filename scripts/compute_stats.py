@@ -1,20 +1,6 @@
 #!/usr/bin/env python3
-"""
-Compute confusion matrix and classification metrics from hallucinator review annotations.
-Always writes both a CSV and an HTML report.
-If a hallucinator-results.csv exists in the same directory as the annotations file,
-it is merged automatically to enrich the FP-by-source-DB breakdown.
-
-Usage:
-    python scripts/compute_stats.py data/icml/pre/review-annotations.csv:Pre data/icml/post/review-annotations.csv:Post
-    python scripts/compute_stats.py ... --output results/icml-stats   # writes icml-stats.csv + icml-stats.html
-
-Label interpretation (from the review tool):
-    ""            (empty)       = verified ref, assumed real  → TN
-    "hallucinated"              = tool was right, paper is fake → TP
-    "real"                      = tool was wrong, paper is real → FP
-    "uncertain"                 = extraction error / can't verify → FN
-"""
+# python scripts/compute_stats.py data/icml/pre/review-annotations.csv:Pre data/icml/post/review-annotations.csv:Post
+# python scripts/compute_stats.py ... --output results/icml-stats   # writes icml-stats.csv + icml-stats.html
 
 import csv
 import math
@@ -24,9 +10,6 @@ from collections import defaultdict
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
-
-
-# ── Data structures ────────────────────────────────────────────────────────
 
 @dataclass
 class Counts:
@@ -43,11 +26,8 @@ class Counts:
     per_paper_fn: dict = field(default_factory=lambda: defaultdict(int))
     per_paper_tn: dict = field(default_factory=lambda: defaultdict(int))
     fp_by_source: dict = field(default_factory=lambda: defaultdict(int))
-    tp_refs: list = field(default_factory=list)   # (paper_short, ref_num, raw_citation, status)
+    tp_refs: list = field(default_factory=list)
     total_papers: int = 0
-
-
-# ── Math helpers ───────────────────────────────────────────────────────────
 
 def _div(a: int, b: int) -> Optional[float]:
     return a / b if b > 0 else None
@@ -69,11 +49,6 @@ def _mcc(tp: int, fp: int, tn: int, fn: int) -> Optional[float]:
     denom = math.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
     return (tp * tn - fp * fn) / denom if denom else None
 
-
-
-
-# ── Data loading ───────────────────────────────────────────────────────────
-
 def load_annotations(path: Path) -> list[dict]:
     with open(path, encoding="utf-8") as f:
         return list(csv.DictReader(f))
@@ -93,11 +68,9 @@ def load_raw_citations(json_path: Path) -> dict:
 
 
 def load_source_map(results_path: Path) -> dict:
-    # value: (source_db, paper_url)
     m = {}
     with open(results_path, encoding="utf-8") as f:
         for row in csv.DictReader(f):
-            # Join key uses Ref# (1-based original number), matching RefNum in annotations
             m[(row["Filename"], row.get("Ref#", ""))] = (
                 row.get("Source", "") or "unknown",
                 row.get("PaperURL", "") or None,
@@ -110,7 +83,7 @@ def compute_counts(rows: list[dict], source_map: dict = None, raw_citation_map: 
     papers = set()
     for row in rows:
         filename = row["Filename"]
-        ref_num  = row["RefNum"]   # 1-based, matches Ref# in hallucinator-results.csv
+        ref_num  = row["RefNum"]
         status   = row["PredictedStatus"]
         label    = row["ManualLabel"].strip()
         papers.add(filename)
@@ -140,9 +113,6 @@ def compute_counts(rows: list[dict], source_map: dict = None, raw_citation_map: 
 
     c.total_papers = len(papers)
     return c
-
-
-# ── Console output ─────────────────────────────────────────────────────────
 
 def _rq1_rates(c: Counts) -> dict:
     total = c.tp + c.fp + c.tn + c.fn
@@ -213,9 +183,6 @@ def print_comparison(datasets: list[tuple[str, Counts]]):
     print(sep)
     print()
 
-
-# ── CSV output ─────────────────────────────────────────────────────────────
-
 def write_csv(path: Path, datasets: list[tuple[str, Counts]]):
     rows = []
     for label, c in datasets:
@@ -240,9 +207,6 @@ def write_csv(path: Path, datasets: list[tuple[str, Counts]]):
         w.writeheader()
         w.writerows(rows)
     print(f"CSV  → {path}")
-
-
-# ── HTML output ────────────────────────────────────────────────────────────
 
 def _he(s) -> str:
     return str(s).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
@@ -274,7 +238,6 @@ def _section_html(label: str, c: Counts, show_source: bool) -> str:
     total   = r["total"]
     flagged = r["flagged"]
 
-    # ── stat cards ────────────────────────────────────────────────
     cards = [
         ("Papers",         c.total_papers,                   "var(--blue)"),
         ("Checkable Refs", total,                             "var(--text)"),
@@ -288,7 +251,6 @@ def _section_html(label: str, c: Counts, show_source: bool) -> str:
                        f'<span class="label">{card_label}</span></div>')
     cards_html += '</div>'
 
-    # ── confusion matrix ──────────────────────────────────────────
     matrix_html = f'''
 <h3 style="margin-bottom:1rem">Confusion Matrix
   <span style="color:var(--dim);font-weight:400;font-size:0.8rem">&nbsp;({_pct(r["flagged_rate"])} flagged)</span>
@@ -313,7 +275,6 @@ def _section_html(label: str, c: Counts, show_source: bool) -> str:
   </tbody>
 </table>'''
 
-    # ── TP reference list ─────────────────────────────────────────
     if c.tp_refs:
         tp_html = f'<h3 style="margin-bottom:0.75rem;color:var(--green)">Confirmed Hallucinations ({c.tp})</h3>'
         tp_html += '<table class="data-table" style="margin-bottom:2rem"><thead><tr><th>Paper</th><th>#</th><th>Raw Citation</th><th>Status</th></tr></thead><tbody>'
@@ -437,9 +398,6 @@ Extraction error = parser failure, can't judge</small></p>
     path.write_text(html, encoding="utf-8")
     print(f"HTML → {path}")
 
-
-# ── Main ───────────────────────────────────────────────────────────────────
-
 def main():
     parser = argparse.ArgumentParser(
         description="Compute confusion matrix and metrics from hallucinator review annotations."
@@ -464,7 +422,6 @@ def main():
             print(f"Error: file not found: {path}", file=sys.stderr)
             sys.exit(1)
 
-        # Auto-discover hallucinator-results.csv and .json in the same directory
         source_map = None
         results_csv = path.parent / "hallucinator-results.csv"
         if results_csv.exists():

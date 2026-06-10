@@ -658,12 +658,8 @@ pub(crate) fn build_database_list(
         } else if let Some(ref key) = config.openalex_key {
             // When `openalex_fallback_only` is set (the default), online
             // OpenAlex is deliberately kept OUT of the concurrent query
-            // group — it runs only as a last-resort fallback for references
-            // nothing else found (see `apply_fallbacks` in pool.rs and the
-            // OpenAlex fallback in checker.rs). That keeps OpenAlex's strict
-            // rate limit from being hit on every reference. With the flag
-            // off, restore the legacy behavior of inserting it at the front
-            // so it's queried alongside everything else.
+            // group, it runs only as a last-resort fallback for references
+            // nothing else found.
             if !config.openalex_fallback_only {
                 databases.insert(
                     0,

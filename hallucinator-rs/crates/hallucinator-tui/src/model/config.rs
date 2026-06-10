@@ -90,8 +90,7 @@ pub struct ConfigState {
     /// SearxNG URL for web search fallback (None = disabled)
     pub searxng_url: Option<String>,
     /// When true (the default), online OpenAlex runs only as a last-resort
-    /// fallback rather than alongside the other databases — keeps OpenAlex's
-    /// rate limit from being hit on every reference.
+    /// fallback rather than alongside the other databases
     pub openalex_fallback_only: bool,
 }
 

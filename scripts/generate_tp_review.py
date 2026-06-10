@@ -1,31 +1,5 @@
 #!/usr/bin/env python3
-"""
-generate_tp_review.py
-
-Filter the true-positives (confirmed hallucinations) out of a
-review-annotations.csv and produce an interactive HTML review tool that lets
-you re-label each TP under a category, plus a CSV of the filtered TPs.
-
-A TP = PredictedStatus in {not_found, mismatch} AND ManualLabel == 'hallucinated'
-(the same definition compute_stats.py uses for the confusion matrix).
-
-Usage:
-    python3 generate_tp_review.py PATH/TO/review-annotations.csv \
-        [--results-json PATH/TO/hallucinator-results.json] \
-        [--output tp-review] \
-        [--era pre|post|auto]
-
-Notes:
-- --results-json is optional but recommended: raw citations are resolved from
-  it. The lookup is keyed on the *basename* of the filename (PMCxxxx.pdf), which
-  sidesteps the pre.zip / pre_llm.zip prefix mismatch. Falls back to the CSV
-  Title column when a raw citation can't be resolved.
-- --era controls the category list. 'pre' omits the genuine-fabrication option
-  (LLMs did not exist, so a confirmed hallucination must be some other error);
-  'post' includes it. 'auto' infers from the filename prefix.
-- The HTML stores your labels in the browser (localStorage) and has Export
-  buttons to download a CSV/JSON of your decisions. Open it locally.
-"""
+#python3 generate_tp_review.py PATH/TO/review-annotations.csv --results-json PATH/TO/hallucinator-results.json --output tp-review --era pre|post|auto
 
 import argparse
 import csv
@@ -34,9 +8,6 @@ import os
 import sys
 from html import escape
 
-# ---------------------------------------------------------------------------
-# Category lists -- edit freely.
-# ---------------------------------------------------------------------------
 BASE_CATEGORIES = [
     "Typo",
     "Author mistake",
@@ -45,7 +16,7 @@ BASE_CATEGORIES = [
     "Paper not found",
 ]
 POST_ONLY_CATEGORIES = [
-    "Possible hallucination",  # only offered in the post-LLM era
+    "Possible hallucination",
 ]
 
 CHECKABLE_POSITIVE = {"not_found", "mismatch"}
@@ -114,7 +85,6 @@ def main():
         print("No TP rows found (PredictedStatus in {not_found,mismatch} AND "
               "ManualLabel == 'hallucinated').", file=sys.stderr)
 
-    # --- write filtered TP csv ---
     csv_path = f"{args.output}.csv"
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
@@ -124,7 +94,6 @@ def main():
             w.writerow([t["paper"], t["filename"], t["ref_index"], t["ref_num"],
                         t["status"], t["raw"], "", ""])
 
-    # --- write review html ---
     html_path = f"{args.output}.html"
     payload = json.dumps(tps, ensure_ascii=False)
     cats = json.dumps(categories, ensure_ascii=False)
